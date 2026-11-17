@@ -533,22 +533,11 @@ void controlMotores() {
 
   if (!enLinea) {
     // ========================================================================
-    // MODO RECUPERACIÓN SUAVE: Avanza en arco hacia adelante (NO se clava en 0)
+    // Si pierde la línea, avanza RECTO hacia adelante buscando la pista.
+    // ¡CERO círculos ni trompos! Ambos motores avanzan a la misma velocidad.
     // ========================================================================
-    int turnDelta = (int)(baseSpeed * 0.55f);
-
-    if (abs(lastKnownError) < 0.1f) {
-      speedRight = baseSpeed;
-      speedLeft  = baseSpeed;
-    } else if (lastKnownError < 0.0f) {
-      // Línea perdida a la izquierda: curva hacia la izquierda avanzando
-      speedRight = constrain(baseSpeed + turnDelta, 0, 255);
-      speedLeft  = constrain(baseSpeed - turnDelta, 20, 255);
-    } else {
-      // Línea perdida a la derecha: curva hacia la derecha avanzando
-      speedRight = constrain(baseSpeed - turnDelta, 20, 255);
-      speedLeft  = constrain(baseSpeed + turnDelta, 0, 255);
-    }
+    speedRight = baseSpeed;
+    speedLeft  = baseSpeed;
   } else {
     // Modo seguimiento normal con control PID
     speedRight = baseSpeed - (int)PID_value;
