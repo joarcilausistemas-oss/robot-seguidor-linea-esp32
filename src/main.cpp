@@ -68,7 +68,7 @@ bool choqueDetectado = false;
 
 // Diagnóstico
 bool invertirSensores = false;   // false para BFD-1000 normal (0 sobre blanco, 1 sobre cinta negra)
-bool invertirGiro = false;       // true para invertir dirección de timón (ruedas) en vivo desde el celular
+bool invertirGiro = true;        // Fijado en true por defecto para corregir siempre hacia adentro de la línea
 int testMotor = 0;               // 0 = ninguno, 1 = motor A, 2 = motor B, 3 = ambos
 unsigned long testHasta = 0;     // Fin de la prueba de motor (millis)
 const int TEST_SPEED = 50;
@@ -232,7 +232,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         Invertir sensores (marcar solo si tu pista es blanca sobre fondo negro)
       </label>
       <label style="display:flex; align-items:center; gap:10px; margin-top:14px; font-size:0.88rem; font-weight:700; color:#38bdf8;">
-        <input type="checkbox" id="chk-inv-giro" style="width:22px; height:22px;" onchange="enviarInvertirGiro(this.checked)">
+        <input type="checkbox" id="chk-inv-giro" checked style="width:22px; height:22px;" onchange="enviarInvertirGiro(this.checked)">
         🔄 Invertir Dirección de Giro (marcar si huye de la línea)
       </label>
     </div>
