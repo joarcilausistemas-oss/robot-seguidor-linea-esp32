@@ -68,6 +68,7 @@ bool choqueDetectado = false;
 
 // Diagnóstico
 bool invertirSensores = false;   // false para BFD-1000 normal (0 sobre blanco, 1 sobre cinta negra)
+bool invertirGiro = false;       // true para invertir dirección de timón (ruedas) en vivo desde el celular
 int testMotor = 0;               // 0 = ninguno, 1 = motor A, 2 = motor B, 3 = ambos
 unsigned long testHasta = 0;     // Fin de la prueba de motor (millis)
 const int TEST_SPEED = 50;
@@ -230,6 +231,10 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         <input type="checkbox" id="chk-invertir" style="width:22px; height:22px;" onchange="enviarInvertir(this.checked)">
         Invertir sensores (marcar solo si tu pista es blanca sobre fondo negro)
       </label>
+      <label style="display:flex; align-items:center; gap:10px; margin-top:14px; font-size:0.88rem; font-weight:700; color:#38bdf8;">
+        <input type="checkbox" id="chk-inv-giro" style="width:22px; height:22px;" onchange="enviarInvertirGiro(this.checked)">
+        🔄 Invertir Dirección de Giro (marcar si huye de la línea)
+      </label>
     </div>
   </div>
 
@@ -271,6 +276,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
           if (data.error !== undefined) document.getElementById('val-error').innerText = Number(data.error).toFixed(2);
           if (data.PID !== undefined) document.getElementById('val-pid').innerText = Number(data.PID).toFixed(1);
           if (data.invertido !== undefined) document.getElementById('chk-invertir').checked = data.invertido;
+          if (data.invGiro !== undefined) document.getElementById('chk-inv-giro').checked = data.invGiro;
           if (data.activo !== undefined) {
             robotCorriendo = data.activo;
             actualizarBotonEstado();
@@ -327,6 +333,11 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
     function enviarInvertir(v) {
       if (!socket || socket.readyState !== WebSocket.OPEN) { alert("Sin conexión al robot"); return; }
       socket.send(JSON.stringify({ invertir: v }));
+    }
+
+    function enviarInvertirGiro(v) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) { alert("Sin conexión al robot"); return; }
+      socket.send(JSON.stringify({ invGiro: v }));
     }
 
     function enviarParametros() {
@@ -522,24 +533,21 @@ void controlMotores() {
 
   if (!enLinea) {
     // ========================================================================
-    // MODO RECUPERACIÓN / BÚSQUEDA SUAVE DE LÍNEA
-    // Si pierde la línea, busca suavemente hacia adelante abriendo el arco,
-    // en lugar de girar en trompo descontrolado sobre el mismo punto.
+    // MODO RECUPERACIÓN SUAVE: Avanza en arco hacia adelante (NO se clava en 0)
     // ========================================================================
-    int searchSpeed = constrain(baseSpeed, 35, 50);
+    int turnDelta = (int)(baseSpeed * 0.55f);
 
     if (abs(lastKnownError) < 0.1f) {
-      // Al arrancar o si estaba centrada: avanza recto suave buscando la pista
-      speedRight = searchSpeed;
-      speedLeft  = searchSpeed;
+      speedRight = baseSpeed;
+      speedLeft  = baseSpeed;
     } else if (lastKnownError < 0.0f) {
-      // Línea perdida hacia la IZQUIERDA -> Curva suave a la izquierda
-      speedRight = searchSpeed;
-      speedLeft  = 0;
+      // Línea perdida a la izquierda: curva hacia la izquierda avanzando
+      speedRight = constrain(baseSpeed + turnDelta, 0, 255);
+      speedLeft  = constrain(baseSpeed - turnDelta, 20, 255);
     } else {
-      // Línea perdida hacia la DERECHA -> Curva suave a la derecha
-      speedRight = 0;
-      speedLeft  = searchSpeed;
+      // Línea perdida a la derecha: curva hacia la derecha avanzando
+      speedRight = constrain(baseSpeed - turnDelta, 20, 255);
+      speedLeft  = constrain(baseSpeed + turnDelta, 0, 255);
     }
   } else {
     // Modo seguimiento normal con control PID
@@ -547,15 +555,18 @@ void controlMotores() {
     speedLeft  = baseSpeed + (int)PID_value;
 
     int maxPermitido = constrain(baseSpeed + 50, 0, 255);
-    speedRight = constrain(speedRight, -30, maxPermitido);
-    speedLeft  = constrain(speedLeft, -30, maxPermitido);
+    speedRight = constrain(speedRight, 0, maxPermitido);
+    speedLeft  = constrain(speedLeft, 0, maxPermitido);
   }
 
-  // Control diferencial de motores:
-  // Motor A = Rueda Izquierda (speedLeft)
-  // Motor B = Rueda Derecha   (speedRight)
-  setMotor(canalPWM_A, AIN1, AIN2, speedLeft, INVERT_MOTOR_A);
-  setMotor(canalPWM_B, BIN1, BIN2, speedRight, INVERT_MOTOR_B);
+  // Si se activa invertir giro desde el celular, intercambia ruedas de inmediato
+  int finalLeft  = invertirGiro ? speedRight : speedLeft;
+  int finalRight = invertirGiro ? speedLeft  : speedRight;
+
+  // Motor A = Rueda Izquierda (finalLeft)
+  // Motor B = Rueda Derecha   (finalRight)
+  setMotor(canalPWM_A, AIN1, AIN2, finalLeft, INVERT_MOTOR_A);
+  setMotor(canalPWM_B, BIN1, BIN2, finalRight, INVERT_MOTOR_B);
 }
 
 void setMotor(int canalPWM, int in1, int in2, int speed, bool reverse) {
@@ -590,6 +601,7 @@ void enviarTelemetria() {
   doc["enLinea"] = enLinea;
   doc["activo"] = robotActivo;
   doc["invertido"] = invertirSensores;
+  doc["invGiro"] = invertirGiro;
   doc["obstaculo"] = obstaculoDetectado;
   doc["choque"] = choqueDetectado;
 
@@ -621,10 +633,14 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       Serial.printf("Estado del robot: %s\n", robotActivo ? "ACTIVO" : "DETENIDO");
     }
 
-    // 5. Diagnóstico: invertir lógica de sensores y probar motores
+    // 5. Diagnóstico: invertir lógica de sensores, invertir giro y probar motores
     if (doc.containsKey("invertir")) {
       invertirSensores = doc["invertir"].as<bool>();
       Serial.printf("Sensores invertidos: %s\n", invertirSensores ? "SI" : "NO");
+    }
+    if (doc.containsKey("invGiro")) {
+      invertirGiro = doc["invGiro"].as<bool>();
+      Serial.printf("Giro invertido: %s\n", invertirGiro ? "SI" : "NO");
     }
     if (doc.containsKey("test")) {
       testMotor = doc["test"].as<int>();
