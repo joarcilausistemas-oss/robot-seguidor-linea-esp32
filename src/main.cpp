@@ -551,9 +551,11 @@ void controlMotores() {
     speedLeft  = constrain(speedLeft, -30, maxPermitido);
   }
 
-  // Control diferencial de motores
-  setMotor(canalPWM_A, AIN1, AIN2, speedRight, INVERT_MOTOR_A);
-  setMotor(canalPWM_B, BIN1, BIN2, speedLeft, INVERT_MOTOR_B);
+  // Control diferencial de motores:
+  // Motor A = Rueda Izquierda (speedLeft)
+  // Motor B = Rueda Derecha   (speedRight)
+  setMotor(canalPWM_A, AIN1, AIN2, speedLeft, INVERT_MOTOR_A);
+  setMotor(canalPWM_B, BIN1, BIN2, speedRight, INVERT_MOTOR_B);
 }
 
 void setMotor(int canalPWM, int in1, int in2, int speed, bool reverse) {
