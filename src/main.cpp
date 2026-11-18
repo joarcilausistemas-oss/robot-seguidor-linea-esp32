@@ -69,6 +69,9 @@ bool choqueDetectado = false;
 // Diagnóstico
 bool invertirSensores = false;   // false para BFD-1000 normal (0 sobre blanco, 1 sobre cinta negra)
 bool invertirGiro = true;        // Fijado en true por defecto para corregir siempre hacia adentro de la línea
+bool autoStartEnLinea = true;    // Arranca automáticamente al colocarlo sobre la línea
+unsigned long tiempoEnLineaInicio = 0;
+unsigned long tiempoFueraLinea = 0;
 int testMotor = 0;               // 0 = ninguno, 1 = motor A, 2 = motor B, 3 = ambos
 unsigned long testHasta = 0;     // Fin de la prueba de motor (millis)
 const int TEST_SPEED = 50;
@@ -235,6 +238,10 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         <input type="checkbox" id="chk-inv-giro" checked style="width:22px; height:22px;" onchange="enviarInvertirGiro(this.checked)">
         🔄 Invertir Dirección de Giro (marcar si huye de la línea)
       </label>
+      <label style="display:flex; align-items:center; gap:10px; margin-top:14px; font-size:0.88rem; font-weight:700; color:#10b981;">
+        <input type="checkbox" id="chk-autostart" checked style="width:22px; height:22px;" onchange="enviarAutoStart(this.checked)">
+        🚀 Auto-arranque al posar en la línea
+      </label>
     </div>
   </div>
 
@@ -277,6 +284,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
           if (data.PID !== undefined) document.getElementById('val-pid').innerText = Number(data.PID).toFixed(1);
           if (data.invertido !== undefined) document.getElementById('chk-invertir').checked = data.invertido;
           if (data.invGiro !== undefined) document.getElementById('chk-inv-giro').checked = data.invGiro;
+          if (data.autoStart !== undefined) document.getElementById('chk-autostart').checked = data.autoStart;
           if (data.activo !== undefined) {
             robotCorriendo = data.activo;
             actualizarBotonEstado();
@@ -338,6 +346,11 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
     function enviarInvertirGiro(v) {
       if (!socket || socket.readyState !== WebSocket.OPEN) { alert("Sin conexión al robot"); return; }
       socket.send(JSON.stringify({ invGiro: v }));
+    }
+
+    function enviarAutoStart(v) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) { alert("Sin conexión al robot"); return; }
+      socket.send(JSON.stringify({ autoStart: v }));
     }
 
     function enviarParametros() {
@@ -430,6 +443,31 @@ void loop() {
     lastControlTime = currentMicros;
 
     leerSensores();
+
+    // Auto-arranque al posar sobre la línea (confirmar 350 ms sobre cinta negra)
+    if (!robotActivo && enLinea && autoStartEnLinea && !choqueDetectado) {
+      if (tiempoEnLineaInicio == 0) {
+        tiempoEnLineaInicio = millis();
+      } else if (millis() - tiempoEnLineaInicio >= 350) {
+        robotActivo = true;
+        tiempoEnLineaInicio = 0;
+        Serial.println("¡Línea detectada! Auto-arranque activado");
+      }
+    } else {
+      tiempoEnLineaInicio = 0;
+    }
+
+    // Auto-apagado de seguridad si se levanta del piso más de 3 segundos
+    if (robotActivo && !enLinea) {
+      if (tiempoFueraLinea == 0) tiempoFueraLinea = millis();
+      else if (millis() - tiempoFueraLinea >= 3000) {
+        robotActivo = false;
+        tiempoFueraLinea = 0;
+        Serial.println("Robot levantado: Auto-apagado de seguridad");
+      }
+    } else {
+      tiempoFueraLinea = 0;
+    }
 
     // Verificación de Choque (Parada de Emergencia Absoluta)
     if (choqueDetectado && robotActivo) {
@@ -591,6 +629,7 @@ void enviarTelemetria() {
   doc["activo"] = robotActivo;
   doc["invertido"] = invertirSensores;
   doc["invGiro"] = invertirGiro;
+  doc["autoStart"] = autoStartEnLinea;
   doc["obstaculo"] = obstaculoDetectado;
   doc["choque"] = choqueDetectado;
 
@@ -630,6 +669,10 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
     if (doc.containsKey("invGiro")) {
       invertirGiro = doc["invGiro"].as<bool>();
       Serial.printf("Giro invertido: %s\n", invertirGiro ? "SI" : "NO");
+    }
+    if (doc.containsKey("autoStart")) {
+      autoStartEnLinea = doc["autoStart"].as<bool>();
+      Serial.printf("Auto-Start: %s\n", autoStartEnLinea ? "ACTIVADO" : "DESACTIVADO");
     }
     if (doc.containsKey("test")) {
       testMotor = doc["test"].as<int>();
