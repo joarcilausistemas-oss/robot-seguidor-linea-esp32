@@ -47,9 +47,9 @@ const int resolucion = 8; // 0 - 255
 // ============================================================================
 // 4. PARÁMETROS PID Y ESTADO DEL ROBOT
 // ============================================================================
-float Kp = 18.0f;
+float Kp = 10.0f;
 float Ki = 0.0f;
-float Kd = 12.0f;
+float Kd = 6.0f;
 
 float error = 0.0f;
 float lastError = 0.0f;
@@ -57,7 +57,7 @@ float lastKnownError = 0.0f;
 float P = 0.0f, I = 0.0f, D = 0.0f;
 float PID_value = 0.0f;
 
-int baseSpeed = 35; // Velocidad base reducida para máxima estabilidad y control en curvas
+int baseSpeed = 20; // Velocidad mínima ultra lenta para máxima precisión y control total
 int sensorValues[5] = {0, 0, 0, 0, 0};
 bool enLinea = true;
 bool robotActivo = false; // Comienza detenido por seguridad hasta recibir orden del celular
@@ -200,8 +200,8 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
       <div style="font-size: 0.8rem; color: #94a3b8; font-weight: 600; margin-bottom: 10px;">AJUSTE PID EN VIVO</div>
       
       <div class="control-group">
-        <div class="control-label"><span>Proporcional (Kp)</span><span id="lbl-kp">18.0</span></div>
-        <input type="range" id="input-kp" min="0" max="100" step="0.5" value="18.0" oninput="document.getElementById('lbl-kp').innerText = this.value; enviarParametros();">
+        <div class="control-label"><span>Proporcional (Kp)</span><span id="lbl-kp">10.0</span></div>
+        <input type="range" id="input-kp" min="0" max="100" step="0.5" value="10.0" oninput="document.getElementById('lbl-kp').innerText = this.value; enviarParametros();">
       </div>
 
       <div class="control-group">
@@ -210,13 +210,13 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
       </div>
 
       <div class="control-group">
-        <div class="control-label"><span>Derivativo (Kd)</span><span id="lbl-kd">12.0</span></div>
-        <input type="range" id="input-kd" min="0" max="50" step="0.5" value="12.0" oninput="document.getElementById('lbl-kd').innerText = this.value; enviarParametros();">
+        <div class="control-label"><span>Derivativo (Kd)</span><span id="lbl-kd">6.0</span></div>
+        <input type="range" id="input-kd" min="0" max="50" step="0.5" value="6.0" oninput="document.getElementById('lbl-kd').innerText = this.value; enviarParametros();">
       </div>
 
       <div class="control-group">
-        <div class="control-label"><span>Velocidad Base (PWM)</span><span id="lbl-speed">35</span></div>
-        <input type="range" id="input-speed" min="0" max="255" step="1" value="35" oninput="document.getElementById('lbl-speed').innerText = this.value; enviarParametros();">
+        <div class="control-label"><span>Velocidad Base (PWM)</span><span id="lbl-speed">20</span></div>
+        <input type="range" id="input-speed" min="0" max="255" step="1" value="20" oninput="document.getElementById('lbl-speed').innerText = this.value; enviarParametros();">
       </div>
 
       <button class="btn-save" onclick="enviarParametros()">APLICAR PARÁMETROS</button>
@@ -581,7 +581,7 @@ void controlMotores() {
     speedRight = baseSpeed - (int)PID_value;
     speedLeft  = baseSpeed + (int)PID_value;
 
-    int maxPermitido = constrain(baseSpeed + 50, 0, 255);
+    int maxPermitido = constrain(baseSpeed + 15, 0, 255);
     speedRight = constrain(speedRight, 0, maxPermitido);
     speedLeft  = constrain(speedLeft, 0, maxPermitido);
   }
