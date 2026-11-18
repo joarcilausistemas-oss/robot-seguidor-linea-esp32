@@ -70,6 +70,7 @@ bool choqueDetectado = false;
 bool invertirSensores = false;   // false para BFD-1000 normal (0 sobre blanco, 1 sobre cinta negra)
 bool invertirGiro = true;        // Fijado en true por defecto para corregir siempre hacia adentro de la línea
 bool autoStartEnLinea = true;    // Arranca automáticamente al colocarlo sobre la línea
+bool bloqueoAutoStart = false;   // Evita re-arranque inmediato tras pulsar Parada en el celular
 unsigned long tiempoEnLineaInicio = 0;
 unsigned long tiempoFueraLinea = 0;
 unsigned long tiempoTodosNegros = 0;
@@ -77,7 +78,6 @@ int numActivos = 0;              // Cuántos sensores ven negro (5 = robot levan
 const int VEL_MAX = 60;          // Tope absoluto de velocidad PWM (nunca se supera)
 int testMotor = 0;               // 0 = ninguno, 1 = motor A, 2 = motor B, 3 = ambos
 unsigned long testHasta = 0;     // Fin de la prueba de motor (millis)
-const int TEST_SPEED = 50;
 const unsigned long TEST_DURATION_MS = 1500;
 
 const float MAX_I = 150.0f;
@@ -288,6 +288,10 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
           if (data.invertido !== undefined) document.getElementById('chk-invertir').checked = data.invertido;
           if (data.invGiro !== undefined) document.getElementById('chk-inv-giro').checked = data.invGiro;
           if (data.autoStart !== undefined) document.getElementById('chk-autostart').checked = data.autoStart;
+          if (data.Kp !== undefined) { document.getElementById('input-kp').value = data.Kp; document.getElementById('lbl-kp').innerText = data.Kp; }
+          if (data.Ki !== undefined) { document.getElementById('input-ki').value = data.Ki; document.getElementById('lbl-ki').innerText = data.Ki; }
+          if (data.Kd !== undefined) { document.getElementById('input-kd').value = data.Kd; document.getElementById('lbl-kd').innerText = data.Kd; }
+          if (data.baseSpeed !== undefined) { document.getElementById('input-speed').value = data.baseSpeed; document.getElementById('lbl-speed').innerText = data.baseSpeed; }
           if (data.activo !== undefined) {
             robotCorriendo = data.activo;
             actualizarBotonEstado();
@@ -423,6 +427,7 @@ void setup() {
 
   // Servidor Web HTTP (Puerto 80)
   server.on("/", []() {
+    server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     server.send(200, "text/html", PAGE_HTML);
   });
   server.begin();
@@ -449,11 +454,16 @@ void loop() {
 
     // ------------------------------------------------------------------------
     // AUTO-ARRANQUE ESTRICTO: solo arranca si el patrón es "robot apoyado en la
-    // línea": sensor central S3 activo y los extremos S1 y S5 sobre piso blanco,
-    // estable durante 1 segundo. Una mano o el robot en el aire NO lo activan.
+    // línea": al menos un sensor central (S2, S3 o S4) activo y los extremos
+    // S1 y S5 sobre piso blanco, estable durante 1 segundo.
     // ------------------------------------------------------------------------
-    bool patronInicio = (sensorValues[2] == 1 && sensorValues[0] == 0 && sensorValues[4] == 0);
-    if (!robotActivo && autoStartEnLinea && patronInicio && !choqueDetectado) {
+    bool hayCentro = (sensorValues[1] == 1 || sensorValues[2] == 1 || sensorValues[3] == 1);
+    bool patronInicio = (hayCentro && sensorValues[0] == 0 && sensorValues[4] == 0 && numActivos <= 3);
+    if (!patronInicio) {
+      bloqueoAutoStart = false; // Se desbloquea al levantar o sacar el robot de la línea
+    }
+
+    if (!robotActivo && autoStartEnLinea && !bloqueoAutoStart && patronInicio && !choqueDetectado) {
       if (tiempoEnLineaInicio == 0) {
         tiempoEnLineaInicio = millis();
       } else if (millis() - tiempoEnLineaInicio >= 1000) {
@@ -468,11 +478,11 @@ void loop() {
 
     // ------------------------------------------------------------------------
     // ROBOT LEVANTADO: en el aire los 5 sensores marcan "negro" a la vez.
-    // Si dura más de 300 ms -> apagado inmediato (no gira loco en la mano).
+    // Si dura más de 500 ms -> apagado inmediato (no gira loco en la mano).
     // ------------------------------------------------------------------------
     if (numActivos == 5) {
       if (tiempoTodosNegros == 0) tiempoTodosNegros = millis();
-      else if (robotActivo && millis() - tiempoTodosNegros >= 300) {
+      else if (robotActivo && millis() - tiempoTodosNegros >= 500) {
         robotActivo = false;
         Serial.println("Robot levantado: motores apagados");
       }
@@ -497,6 +507,7 @@ void loop() {
     // Verificación de Choque (Parada de Emergencia Absoluta)
     if (choqueDetectado && robotActivo) {
       robotActivo = false;
+      bloqueoAutoStart = true;
       setMotor(canalPWM_A, AIN1, AIN2, 0, INVERT_MOTOR_A);
       setMotor(canalPWM_B, BIN1, BIN2, 0, INVERT_MOTOR_B);
       Serial.println("¡EMERGENCIA: COLISIÓN DETECTADA POR CLP!");
@@ -666,25 +677,48 @@ void enviarTelemetria() {
 }
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  if (type == WStype_CONNECTED) {
+    // Sincronizar los sliders del celular apenas se conecte
+    StaticJsonDocument<256> initDoc;
+    initDoc["Kp"] = Kp;
+    initDoc["Ki"] = Ki;
+    initDoc["Kd"] = Kd;
+    initDoc["baseSpeed"] = baseSpeed;
+    initDoc["invertido"] = invertirSensores;
+    initDoc["invGiro"] = invertirGiro;
+    initDoc["autoStart"] = autoStartEnLinea;
+    initDoc["activo"] = robotActivo;
+    String initJson;
+    serializeJson(initDoc, initJson);
+    webSocket.sendTXT(num, initJson);
+    return;
+  }
+
   if (type == WStype_TEXT) {
     // 1. Imprimir el mensaje crudo recibido para depuración
-    Serial.printf("Mensaje recibido: %s\n", payload);
+    Serial.printf("Mensaje recibido: %.*s\n", (int)length, payload);
 
     // 2. Crear un documento JSON temporal en la memoria
     StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, payload);
+    DeserializationError jsonErr = deserializeJson(doc, payload, length);
 
     // 3. Verificar si el JSON es válido
-    if (error) {
+    if (jsonErr) {
       Serial.print(F("Error al leer JSON: "));
-      Serial.println(error.f_str());
+      Serial.println(jsonErr.f_str());
       return;
     }
 
     // 4. Botón INICIAR / DETENER del panel
     if (doc.containsKey("activo")) {
       robotActivo = doc["activo"].as<bool>();
-      if (!robotActivo) { I = 0.0f; lastError = 0.0f; }
+      if (!robotActivo) {
+        I = 0.0f;
+        lastError = 0.0f;
+        bloqueoAutoStart = true; // Queda detenido hasta levantarlo o darle Iniciar otra vez
+      } else {
+        bloqueoAutoStart = false;
+      }
       Serial.printf("Estado del robot: %s\n", robotActivo ? "ACTIVO" : "DETENIDO");
     }
 
