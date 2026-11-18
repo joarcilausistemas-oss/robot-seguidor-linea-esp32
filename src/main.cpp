@@ -72,6 +72,9 @@ bool invertirGiro = true;        // Fijado en true por defecto para corregir sie
 bool autoStartEnLinea = true;    // Arranca automáticamente al colocarlo sobre la línea
 unsigned long tiempoEnLineaInicio = 0;
 unsigned long tiempoFueraLinea = 0;
+unsigned long tiempoTodosNegros = 0;
+int numActivos = 0;              // Cuántos sensores ven negro (5 = robot levantado en el aire)
+const int VEL_MAX = 60;          // Tope absoluto de velocidad PWM (nunca se supera)
 int testMotor = 0;               // 0 = ninguno, 1 = motor A, 2 = motor B, 3 = ambos
 unsigned long testHasta = 0;     // Fin de la prueba de motor (millis)
 const int TEST_SPEED = 50;
@@ -216,7 +219,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
 
       <div class="control-group">
         <div class="control-label"><span>Velocidad Base (PWM)</span><span id="lbl-speed">20</span></div>
-        <input type="range" id="input-speed" min="0" max="255" step="1" value="20" oninput="document.getElementById('lbl-speed').innerText = this.value; enviarParametros();">
+        <input type="range" id="input-speed" min="0" max="60" step="1" value="20" oninput="document.getElementById('lbl-speed').innerText = this.value; enviarParametros();">
       </div>
 
       <button class="btn-save" onclick="enviarParametros()">APLICAR PARÁMETROS</button>
@@ -444,26 +447,48 @@ void loop() {
 
     leerSensores();
 
-    // Auto-arranque al posar sobre la línea (confirmar 350 ms sobre cinta negra)
-    if (!robotActivo && enLinea && autoStartEnLinea && !choqueDetectado) {
+    // ------------------------------------------------------------------------
+    // AUTO-ARRANQUE ESTRICTO: solo arranca si el patrón es "robot apoyado en la
+    // línea": sensor central S3 activo y los extremos S1 y S5 sobre piso blanco,
+    // estable durante 1 segundo. Una mano o el robot en el aire NO lo activan.
+    // ------------------------------------------------------------------------
+    bool patronInicio = (sensorValues[2] == 1 && sensorValues[0] == 0 && sensorValues[4] == 0);
+    if (!robotActivo && autoStartEnLinea && patronInicio && !choqueDetectado) {
       if (tiempoEnLineaInicio == 0) {
         tiempoEnLineaInicio = millis();
-      } else if (millis() - tiempoEnLineaInicio >= 350) {
+      } else if (millis() - tiempoEnLineaInicio >= 1000) {
         robotActivo = true;
+        I = 0.0f; lastError = 0.0f;
         tiempoEnLineaInicio = 0;
-        Serial.println("¡Línea detectada! Auto-arranque activado");
+        Serial.println("Robot apoyado en la línea: Auto-arranque");
       }
     } else {
       tiempoEnLineaInicio = 0;
     }
 
-    // Auto-apagado de seguridad si se levanta del piso más de 3 segundos
-    if (robotActivo && !enLinea) {
+    // ------------------------------------------------------------------------
+    // ROBOT LEVANTADO: en el aire los 5 sensores marcan "negro" a la vez.
+    // Si dura más de 300 ms -> apagado inmediato (no gira loco en la mano).
+    // ------------------------------------------------------------------------
+    if (numActivos == 5) {
+      if (tiempoTodosNegros == 0) tiempoTodosNegros = millis();
+      else if (robotActivo && millis() - tiempoTodosNegros >= 300) {
+        robotActivo = false;
+        Serial.println("Robot levantado: motores apagados");
+      }
+    } else {
+      tiempoTodosNegros = 0;
+    }
+
+    // ------------------------------------------------------------------------
+    // LÍNEA PERDIDA sobre piso blanco más de 2 s -> se detiene por seguridad
+    // ------------------------------------------------------------------------
+    if (robotActivo && numActivos == 0) {
       if (tiempoFueraLinea == 0) tiempoFueraLinea = millis();
-      else if (millis() - tiempoFueraLinea >= 3000) {
+      else if (millis() - tiempoFueraLinea >= 2000) {
         robotActivo = false;
         tiempoFueraLinea = 0;
-        Serial.println("Robot levantado: Auto-apagado de seguridad");
+        Serial.println("Línea perdida: robot detenido");
       }
     } else {
       tiempoFueraLinea = 0;
@@ -529,6 +554,8 @@ void leerSensores() {
       sumaActivos++;
     }
   }
+
+  numActivos = sumaActivos;
 
   if (sumaActivos > 0 && sumaActivos < 5) {
     error = sumaPesos / (float)sumaActivos;
@@ -688,9 +715,9 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
     if (doc.containsKey("ki")) Ki = doc["ki"].as<float>();
     if (doc.containsKey("kd")) Kd = doc["kd"].as<float>();
 
-    // Velocidad base enviada por el panel
-    if (doc.containsKey("baseSpeed")) baseSpeed = doc["baseSpeed"].as<int>();
-    if (doc.containsKey("velBase")) baseSpeed = doc["velBase"].as<int>();
+    // Velocidad base enviada por el panel (limitada a VEL_MAX por seguridad)
+    if (doc.containsKey("baseSpeed")) baseSpeed = constrain(doc["baseSpeed"].as<int>(), 0, VEL_MAX);
+    if (doc.containsKey("velBase")) baseSpeed = constrain(doc["velBase"].as<int>(), 0, VEL_MAX);
 
     // 7. Imprimir los nuevos valores para confirmar la actualización
     Serial.printf("Kp: %.2f | Ki: %.2f | Kd: %.2f | baseSpeed: %d\n", Kp, Ki, Kd, baseSpeed);
